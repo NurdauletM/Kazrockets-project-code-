@@ -1,0 +1,88 @@
+import asyncio
+import csv
+import time
+from picamera2 import Picamera2
+import serial
+import board
+import adafruit_bmp280
+import smbus
+from rplidar import RPLidar
+from ublox_gps import UbloxGps
+
+# Инициализация датчиков
+I2C = board.I2C()
+bmp280 = adafruit_bmp280.Adafruit_BMP280_I2C(I2C)
+
+LIDAR_PORT = '/dev/ttyUSB0'  # Подключение RPLidar
+lidar = RPLidar(LIDAR_PORT)
+
+GPS_PORT = "/dev/serial0"  # Подключение GPS u-blox ZED-F9P
+serial_gps = serial.Serial(GPS_PORT, baudrate=115200, timeout=1)
+gps = UbloxGps(serial_gps)
+
+# Камера
+camera = Picamera2()
+camera.configure(camera.create_video_configuration())
+camera.start()
+
+# Файл для сохранения данных
+data_file = "sensor_data.csv"
+with open(data_file, "w", newline="") as f:
+    writer = csv.writer(f)
+    writer.writerow(["Time", "Latitude", "Longitude", "Altitude", "Temperature", "Lidar Distance"])
+
+def read_lidar():
+    """Читает данные с RPLidar"""
+    for scan in lidar.iter_scans():
+        for _, angle, distance in scan:
+            if angle < 5:  # Берем только передние точки
+                return distance / 1000  # Перевод в метры
+    return None
+
+async def read_gps():
+    """Читает GPS данные"""
+    try:
+        geo = gps.geo_coords()
+        return geo.lat, geo.lon, geo.alt
+    except:
+        return None, None, None
+
+async def read_bmp280():
+    """Читает высоту и температуру с BMP280"""
+    altitude = bmp280.altitude
+    temperature = bmp280.temperature
+    return altitude, temperature
+
+async def record_video():
+    """Запись видео с камеры"""
+    camera.start_recording("video.h264")
+    await asyncio.sleep(60)  # Записываем 60 секунд
+    camera.stop_recording()
+
+async def collect_data():
+    """Основная функция сбора данных"""
+    while True:
+        gps_data = await read_gps()
+        bmp_data = await read_bmp280()
+        lidar_distance = read_lidar()
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        with open(data_file, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([timestamp, *gps_data, *bmp_data, lidar_distance])
+        
+        print(f"[{timestamp}] GPS: {gps_data}, BMP: {bmp_data}, LIDAR: {lidar_distance} m")
+        
+        await asyncio.sleep(1)
+
+async def main():
+    await asyncio.gather(collect_data(), record_video())
+
+if _name_ == "_main_":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Остановка программы...")
+        lidar.stop()
+        lidar.disconnect()
+        camera.stop()
