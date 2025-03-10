@@ -1,0 +1,48 @@
+import RPi.GPIO as GPIO
+import time
+import os
+from gpiozero import MCP3008  # Для аналогового сигнала
+
+# Пины KY-026
+DIGITAL_PIN = 17  # Пин для цифрового сигнала (огонь)
+ANALOG_CHANNEL = 0  # Канал для аналогового сигнала (температура)
+
+# Настройка GPIO
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(DIGITAL_PIN, GPIO.IN)
+
+# Подключение к MCP3008 (аналоговый сигнал через SPI)
+temp_sensor = MCP3008(channel=ANALOG_CHANNEL)
+
+# Функция для чтения температуры (примерная калибровка)
+def read_temperature():
+    voltage = temp_sensor.value * 3.3  # MCP3008 дает напряжение 0-3.3V
+    temp_celsius = (voltage - 0.5) * 100  # Формула перевода
+    return temp_celsius
+
+# Функция отключения системы
+def shutdown_system(reason):
+    with open("fire_log.txt", "a") as log:
+        log.write(f"Отключение! Причина: {reason} - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    print(f"[ALERT] Система отключается: {reason}")
+    os.system("sudo shutdown now")
+
+# Основной цикл
+try:
+    while True:
+        temp = read_temperature()
+        fire_detected = not GPIO.input(DIGITAL_PIN)  # Если LOW, значит огонь обнаружен
+
+        print(f"Температура: {temp:.2f}°C | Огонь: {'Да' if fire_detected else 'Нет'}")
+
+        if temp > 60:
+            shutdown_system("Перегрев (>60°C)")
+        
+        if fire_detected:
+            shutdown_system("Обнаружен огонь (KY-026)")
+
+        time.sleep(2)  # Обновление каждые 2 секунды
+
+except KeyboardInterrupt:
+    GPIO.cleanup()
+    print("Остановлено пользователем.")
